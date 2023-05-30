@@ -1,3 +1,3 @@
 # steamspypi 데이터 수집 및 분석 프로젝트
-- 주의) `csv`파일을 엑셀로 열어서 볼 경우, 절대로 저장하지 말 것(기본 인코딩이 `ANSI`라 `UTF-8`이 깨질 수 있음!)
-- 매일 수정 & 시행착오 내용은 `edit_logs`에 저장 중.
+- steamspypi를 이용해 steamspy의 보유자 순 상위 5000개 데이터를 수집한 후, 이를 분석하는 프로젝트입니다.
+- `mysql_info.py` 파일을 생성해 host, user, password, db, db_raw을 설정해야 정상적으로 실행됩니다.

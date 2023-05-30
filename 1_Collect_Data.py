@@ -9,12 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import ProgrammingError, OperationalError
 import json
 
+from my_module import get_connection
 import mysql_info
-
-
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 100)
-pd.set_option('display.max_colwidth', 500)
 
 COLUMNS_INFO = ['appid', 'name', 'developer', 'publisher', 'initialprice']
 COLUMNS_TIME_VALUE = ['appid', 'name', 'date', 'ccu', 'positive', 'negative', 
@@ -29,16 +25,12 @@ DIR_TAG = 'tag.csv'
 
 DIR_RAW = 'daily_raw_data/'
 
-MYSQL_HOST = mysql_info.host
-MYSQL_USER = mysql_info.user
-MYSQL_PW = mysql_info.password
-
-MYSQL_DB = mysql_info.db
-MYSQL_DB_RAW = mysql_info.db_raw
+# MYSQL_DB = mysql_info.db
+# MYSQL_DB_RAW = mysql_info.db_raw
 
 # 테스트용 DB
-# MYSQL_DB = 'STEAMTEST'
-# MYSQL_DB_RAW = 'STEAMTEST_RAW'
+MYSQL_DB = 'STEAMTEST'
+MYSQL_DB_RAW = 'STEAMTEST_RAW'
 
 TABLE_INFO = 'info'
 TABLE_TIME_VALUE = 'time_value'
@@ -47,22 +39,6 @@ TABLE_TAG = 'tag'
 TABLE_RAW = 'raw'
 TABLE_RAW_DETAIL = 'raw_detail'
 
-def get_connection(host = MYSQL_HOST,
-                      user = MYSQL_USER,
-                      password = MYSQL_PW,
-                      db = None):
-    
-    if db == None:
-        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/'
-    else:
-        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/{db}'
-    
-    engine = create_engine(db_connection_str, encoding = 'utf-8')
-    conn = engine.connect()
-    
-    return conn
-
-    
 def check_today_raw_data(by='sql', check_table = TABLE_RAW):
     
     """
@@ -103,7 +79,7 @@ def check_today_raw_data(by='sql', check_table = TABLE_RAW):
         return True
 
 
-def get_steamspy_data(N = 5, to_csv = True, to_sql = True):
+def get_steamspy_data(N = 5, to_csv = True, to_sql = True, test = False):
 
     """
     steamspypi를 이용해 보유자 수 기준 상위 5000개 데이터 수집해서 데이터 프레임 반환
@@ -125,6 +101,9 @@ def get_steamspy_data(N = 5, to_csv = True, to_sql = True):
     
         return df
         
+    if test:
+        N = 1
+    
     print(f"오늘의 {N*1000}개 데이터 수집 시작")
     lst = []
     for i in range(N):
@@ -169,12 +148,15 @@ def get_steamspy_data(N = 5, to_csv = True, to_sql = True):
     return df
 
 
-def get_details(appids: iter, to_csv = True, to_sql = True):
+def get_details(appids: iter, to_csv = True, to_sql = True, test = False):
     """
     genre, language, tag를 수집
     """
     need_to_collect = check_today_raw_data(check_table = TABLE_RAW_DETAIL)
     
+    if test:
+        appids = appids[:100]
+        
     if need_to_collect == False:
         conn = get_connection(db = MYSQL_DB_RAW)
 
@@ -188,6 +170,8 @@ def get_details(appids: iter, to_csv = True, to_sql = True):
 
         temp_lst = []
         today = datetime.today().date() - timedelta(days = 1)
+        
+        
         for count, i in enumerate(appids):
 
             data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
@@ -268,8 +252,8 @@ def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
     
     additional_appid = newbie_appid | outrank_appid 
     
-    
-    additional_df = get_details(additional_appid)
+    additional_appid = list(additional_appid)
+    additional_df = get_details(additional_appid, test = test)
     
     # newbie는 새로 생긴 데이터들 -> 3개의 테이블에 추가
     newbie_df = additional_df[additional_df['appid'].isin(newbie_appid)]
@@ -283,14 +267,14 @@ def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
     add_no_time_data_to_db(newbie_df, to_csv = to_csv, to_sql = to_sql)
     add_time_data_to_db(today_time_value_df, to_csv = to_csv, to_sql = to_sql)
     
-def create_table(df, to_csv = True, to_sql = True):
+def create_table(df, to_csv = True, to_sql = True, test = False):
 
     """
     최초 실행 시 오늘의 모든 데이터를 받은 다음, SQL&csv에 저장함
     """
     
     appid = df['appid']
-    detail_df = get_details(appid, to_csv = True, to_sql = True)
+    detail_df = get_details(appid, to_csv = True, to_sql = True, test = test)
     
     info_df = detail_df[COLUMNS_INFO]
     lang_genre_df = detail_df[COLUMNS_LANG_GENRE]
@@ -559,8 +543,15 @@ def create_main_db(conn):
     conn.execute(q_make_tag)
 
 
+
+
 if __name__ == "__main__":
+    TO_CSV = False
+    TO_SQL = True
+    test = False
+    
     if MYSQL_DB == 'STEAMTEST':
+        test = True
         print("테스트 중")
 
     # 0(실행X), 1(실행O), "First"(최초 실행) 반환, 1인 경우 아예 실행 X
@@ -568,7 +559,7 @@ if __name__ == "__main__":
 
     if today_executed == 0: 
         
-        today_df = get_steamspy_data(to_csv = True, to_sql = True) # 오늘의 5000개 게임
+        today_df = get_steamspy_data(to_csv = TO_CSV, to_sql = TO_SQL, test = test) # 오늘의 5000개 게임
         
         
         # 사이트가 이상한 경우
@@ -579,13 +570,16 @@ if __name__ == "__main__":
             q = f"SELECT appid FROM {TABLE_INFO};"
             appid = pd.read_sql(q, conn)['appid']
             
-            detail_df = get_details(appid)            
-            add_time_data_to_db(detail_df, to_csv = True, to_sql = True)
+            if test:
+                appid = appid[:100]
+            
+            detail_df = get_details(appid, test = test)            
+            add_time_data_to_db(detail_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
         # 사이트가 멀쩡한 경우
         else:
             print("사이트 작동 O, 오늘자 데이터들 갱신")
-            add_data_to_db(today_df, to_csv = True, to_sql = True)
+            add_data_to_db(today_df, to_csv = TO_CSV, to_sql = TO_SQL)
             
 
     # 아예 처음 실행되는 경우
@@ -593,11 +587,11 @@ if __name__ == "__main__":
         
         print("최초 실행")
         
-        today_df = get_steamspy_data(to_csv = True, to_sql = True)
+        today_df = get_steamspy_data(to_csv = TO_CSV, to_sql = TO_SQL, test = test)
         
         if type(today_df) == bool: 
             print("현재 정상적으로 조회되지 않는 상황이므로 내일 다시 실행해주세요")
             
         else:
-            create_table(today_df, to_csv = True, to_sql = True)
+            create_table(today_df, to_csv = TO_CSV, to_sql = TO_SQL, test = test)
     
