@@ -4,14 +4,13 @@ import steamspypi
 from datetime import datetime, timedelta
 import time
 import os
+import schedule
+# import pymysql
 from sqlalchemy import create_engine
 from sqlalchemy.exc import ProgrammingError, OperationalError
 import json
-import schedule
-from my_module import get_connection
-import mysql_info
 
-# import pymysql # sqlalchemy에서 사용하기 떄문에 설치는 필요함
+import container_mysql_info
 
 
 COLUMNS_INFO = ['appid', 'name', 'developer', 'publisher', 'initialprice']
@@ -27,8 +26,14 @@ DIR_TAG = 'tag.csv'
 
 DIR_RAW = 'daily_raw_data/'
 
-MYSQL_DB = mysql_info.db
-MYSQL_DB_RAW = mysql_info.db_raw
+MYSQL_HOST = container_mysql_info.host
+# MYSQL_HOST = 'localhost'
+MYSQL_USER = container_mysql_info.user
+MYSQL_PW = container_mysql_info.password
+MYSQL_PORT = container_mysql_info.port
+
+MYSQL_DB = container_mysql_info.db
+MYSQL_DB_RAW = container_mysql_info.db_raw
 
 # 테스트용 DB
 # MYSQL_DB = 'STEAMTEST'
@@ -40,6 +45,23 @@ TABLE_LANG_GENRE = 'lang_genre'
 TABLE_TAG = 'tag'
 TABLE_RAW = 'raw'
 TABLE_RAW_DETAIL = 'raw_detail'
+
+# 컨테이너 버전은 얘도 함수에 같이 포함시켰다. 차이가 있는 거 유의하면서 작업하자.
+def get_connection(host = MYSQL_HOST,
+                user = MYSQL_USER,
+                password = MYSQL_PW,
+                port = MYSQL_PORT,
+                db = None):
+    """sqlalchemy을 이용해 create_engine.connect() 객체를 반환"""
+    if db == None:
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}:{port}/'
+    else:
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}:{port}/{db}'
+    
+    engine = create_engine(db_connection_str, encoding = 'utf-8')
+    conn = engine.connect()
+    
+    return conn
 
 def check_today_raw_data(by='sql', check_table = TABLE_RAW):
     

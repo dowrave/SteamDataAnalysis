@@ -1,0 +1,11 @@
+FROM amd64/python:3.9.16-bullseye
+
+RUN apt-get update && \
+    rm -rf var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY . . 
+
+RUN pip install -U pip && \
+    pip install --no-cache-dir -r requirements.txt
