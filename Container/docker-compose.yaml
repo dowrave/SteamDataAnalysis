@@ -1,0 +1,29 @@
+version: '3'
+services:
+  steamspy-mysql:
+    image: mysql:8.0.33
+    container_name: steamspy-mysql
+    ports:
+      - 33060:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: 0000
+    # SQL이 켜진 다음 collector 수집 체크
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "steamspy-mysql", "-p", "0000"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  steamspy-collector:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: steamspy-collector
+    depends_on:
+      steamspy-mysql:
+        condition: service_healthy
+    command: ["steamspy-mysql"]
+
+networks:
+  default:
+    name: steamspy-network

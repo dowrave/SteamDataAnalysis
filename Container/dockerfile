@@ -8,4 +8,9 @@ WORKDIR /app
 COPY . . 
 
 RUN pip install -U pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt 
+
+# 컨테이너 실행 시 시작되는 프로세스
+ENTRYPOINT ["python", "container_collect_data.py", "--db-host"]
+
+CMD ["localhost"]

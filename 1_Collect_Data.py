@@ -586,7 +586,7 @@ def main_func():
 
     TO_CSV = False
     TO_SQL = True
-    test = False
+    
 
     if MYSQL_DB == 'STEAMTEST':
         test = True # test = True라면 100개의 데이터만 detail 수집함 / 이미 있다면 그냥 이용함
@@ -630,6 +630,7 @@ def main_func():
         else:
             create_table(today_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
+test = False
 main_func()
 schedule.every(6).hours.do(main_func)
 while True:

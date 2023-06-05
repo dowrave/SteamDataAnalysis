@@ -12,10 +12,13 @@ import json
 
 import container_mysql_info
 
+# 컨테이너
+from argparse import ArgumentParser
+
 
 COLUMNS_INFO = ['appid', 'name', 'developer', 'publisher', 'initialprice']
 COLUMNS_TIME_VALUE = ['appid', 'name', 'date', 'ccu', 'positive', 'negative', 
-                        'average_2weeks', 'median_2weeks', 'price', 'discount']
+                        'averagbne_2weeks', 'median_2weeks', 'price', 'discount']
 COLUMNS_LANG_GENRE = ['appid', 'name', 'languages', 'genre']
 COLUMNS_TAG = ['appid', 'name', 'tags']
 
@@ -26,8 +29,16 @@ DIR_TAG = 'tag.csv'
 
 DIR_RAW = 'daily_raw_data/'
 
-MYSQL_HOST = container_mysql_info.host
-# MYSQL_HOST = 'localhost'
+# 컨테이너 실행 시 인자를 받음(굳이 구현 안해도 되긴 하는데, 공부할 겸)
+parser = ArgumentParser()  
+parser.add_argument("--db-host", # 인자를 어떻게 받을 지
+                    dest="MYSQL_host",  # 받는 인자는 args.dest 라는 변수로 들어감
+                    type=str, 
+                    default="localhost") 
+
+args = parser.parse_args()
+
+MYSQL_HOST = args.MYSQL_host # 디폴트 : localhost이며 다른 인자가 들어오면 그걸 취함
 MYSQL_USER = container_mysql_info.user
 MYSQL_PW = container_mysql_info.password
 MYSQL_PORT = container_mysql_info.port
@@ -652,6 +663,9 @@ def main_func():
         else:
             create_table(today_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
+
+
+test = False
 main_func()
 schedule.every(6).hours.do(main_func)
 while True:
