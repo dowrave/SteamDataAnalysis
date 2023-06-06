@@ -6,10 +6,12 @@ services:
     ports:
       - 33060:3306
     environment:
-      MYSQL_ROOT_PASSWORD: 0000
+      MYSQL_ROOT_USER: ${MYSQL_ROOT_USER}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: ${TZ}
     # SQL이 켜진 다음 collector 수집 체크
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "steamspy-mysql", "-p", "0000"]
+      test: ["CMD", "mysqladmin", "-u$MYSQL_ROOT_USER", "-p$MYSQL_ROOT_PASSWORD", "ping", "-h", "localhost"]
       interval: 5s
       timeout: 5s
       retries: 5

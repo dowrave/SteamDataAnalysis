@@ -27,6 +27,9 @@ DIR_TAG = 'tag.csv'
 
 DIR_RAW = 'daily_raw_data/'
 
+MYSQL_HOST = mysql_info.host
+MYSQL_USER = mysql_info.user
+MYSQL_PW = mysql_info.password
 MYSQL_DB = mysql_info.db
 MYSQL_DB_RAW = mysql_info.db_raw
 
@@ -41,7 +44,24 @@ TABLE_TAG = 'tag'
 TABLE_RAW = 'raw'
 TABLE_RAW_DETAIL = 'raw_detail'
 
-def check_today_raw_data(by='sql', check_table = TABLE_RAW):
+# 컨테이너 버전은 얘도 함수에 같이 포함시켰다. 차이가 있는 거 유의하면서 작업하자.
+def get_engine(host = MYSQL_HOST,
+                user = MYSQL_USER,
+                password = MYSQL_PW,
+                db = None):
+    
+    """sqlalchemy을 이용해 create_engine.connect() 객체를 반환"""
+    
+    if db == None:
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/'
+    else:
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/{db}'
+    
+    engine = create_engine(db_connection_str, encoding = 'utf-8')    
+    return engine
+
+
+def check_today_raw_data(conn, by='sql', check_table = TABLE_RAW):
     
     """
     by='sql' : SQL의 raw DB의 raw 데이터를 살펴봄 
@@ -53,7 +73,7 @@ def check_today_raw_data(by='sql', check_table = TABLE_RAW):
     if by == 'sql':
         
         try:
-            conn = get_connection(db = MYSQL_DB_RAW)
+            
             q = f"""SELECT date FROM {check_table} ORDER BY date DESC LIMIT 1"""
             db_last_day = conn.execute(q).fetchall()[0][0]
 
@@ -64,11 +84,10 @@ def check_today_raw_data(by='sql', check_table = TABLE_RAW):
             else:
                 return True
 
-        except (ProgrammingError, IndexError):
+        except (ProgrammingError, IndexError): # IndexError : 데이터가 없는 경우
             return True
 
         except OperationalError:
-            make_DBs()
             return True
         
     if by == 'csv':
@@ -81,23 +100,21 @@ def check_today_raw_data(by='sql', check_table = TABLE_RAW):
         return True
 
 
-def get_steamspy_data(N = 5, to_csv = True, to_sql = True, test = False):
+def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
 
     """
     steamspypi를 이용해 보유자 수 기준 상위 5000개 데이터 수집해서 데이터 프레임 반환
-    draft : 테스트 중에는 DIR_RAW에 수집된 df가 있는지를 확인하고 진행함 / 그게 아니라면 
     """
-    
     
     # 수집되는 데이터는 어제 날짜로 모인 데이터임.
     today = datetime.today().date() - timedelta(days = 1)
     
-    need_to_collect = check_today_raw_data(by = 'sql', check_table = TABLE_RAW)
+    need_to_collect = check_today_raw_data(conn)
     
     if need_to_collect == False: # 이미 SQL이나 DB에 데이터가 있다
         
-        conn = get_connection(db = MYSQL_DB_RAW)
-        
+        q = f"USE {STEAM_DB_RAW}"
+        conn.execute(q)
         q = f"""SELECT * FROM {TABLE_RAW} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
         df = pd.read_sql(q, conn)
     
@@ -141,26 +158,22 @@ def get_steamspy_data(N = 5, to_csv = True, to_sql = True, test = False):
         df.to_csv(f'daily_raw_data/raw_{today.strftime("%Y%m%d")}.csv', index = False)
     
     if to_sql:
-        conn = get_connection(db = MYSQL_DB_RAW)
-    
         df.to_sql(TABLE_RAW, con = conn, if_exists = 'append', index = False)    
-        
-        conn.close()
+
         
     return df
 
 
-def get_details(appids: iter, to_csv = True, to_sql = True, test = False):
+def get_details(conn, appids: iter, to_csv = True, to_sql = True, test = False):
     """
-    genre, language, tag를 수집
+    genre, language, tag를 수집 -> "Raw_detail"에 저장
     """
-    need_to_collect = check_today_raw_data(check_table = TABLE_RAW_DETAIL)
+    need_to_collect = check_today_raw_data(conn, check_table = TABLE_RAW_DETAIL)
     
     if test:
         appids = appids[:100]
         
     if need_to_collect == False:
-        conn = get_connection(db = MYSQL_DB_RAW)
 
         q = f"""SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
         detail_df = pd.read_sql(q, conn)
@@ -206,10 +219,10 @@ def get_details(appids: iter, to_csv = True, to_sql = True, test = False):
         temp_df = detail_df.copy()
         temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
         
-        conn = get_connection(db = MYSQL_DB_RAW)
-    
-        temp_df.to_sql(TABLE_RAW_DETAIL, con = conn, if_exists = 'append', index = False)
-        conn.close()
+        temp_df.to_sql(TABLE_RAW_DETAIL, 
+                       con = conn, 
+                       if_exists = 'append', 
+                       index = False)
         
     print("수집 종료")
     
@@ -223,7 +236,7 @@ def erase_duplicate(df):
 
     return df_return
 
-def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
+def add_data_to_db(conn, conn_raw, df, check_data = 'sql', to_csv = True, to_sql = True):
     
     """
     이미 데이터가 있을 때 새로 얻은 데이터들을 나눠서 저장
@@ -236,11 +249,8 @@ def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
     # SQL
     elif check_data == 'sql':
         
-        conn = get_connection(db = MYSQL_DB)
-        
         q = f"SELECT appid FROM {TABLE_INFO};"
         info_df = pd.read_sql(q, conn)
-        conn.close()
     
     # 새로 생긴 appid & 5000위 밖으로 벗어난 appid 정보 얻기
     already_appid = info_df['appid']
@@ -255,7 +265,7 @@ def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
     additional_appid = newbie_appid | outrank_appid 
     
     additional_appid = list(additional_appid)
-    additional_df = get_details(additional_appid, test = test)
+    additional_df = get_details(conn_raw, additional_appid, test = test)
     
     # newbie는 새로 생긴 데이터들 -> 3개의 테이블에 추가
     newbie_df = additional_df[additional_df['appid'].isin(newbie_appid)]
@@ -266,44 +276,11 @@ def add_data_to_db(df, check_data = 'sql', to_csv = True, to_sql = True):
     today_time_value_df = pd.concat([oldbie_time_value_df, additional_time_value_df])
     
     # 저장
-    add_no_time_data_to_db(newbie_df, to_csv = to_csv, to_sql = to_sql)
-    add_time_data_to_db(today_time_value_df, to_csv = to_csv, to_sql = to_sql)
-    
-def create_table(df, to_csv = True, to_sql = True, test = False):
+    add_no_time_data_to_db(conn, newbie_df, to_csv = to_csv, to_sql = to_sql)
+    add_time_data_to_db(conn, today_time_value_df, to_csv = to_csv, to_sql = to_sql)
 
-    """
-    최초 실행 시 오늘의 모든 데이터를 받은 다음, SQL&csv에 저장함
-    """
-    
-    appid = df['appid']
-    detail_df = get_details(appid, to_csv = True, to_sql = True, test = test)
-    
-    info_df = detail_df[COLUMNS_INFO]
-    lang_genre_df = detail_df[COLUMNS_LANG_GENRE]
-    tag_df = detail_df[COLUMNS_TAG]
-    time_value_df = detail_df[COLUMNS_TIME_VALUE]
-    
-    if to_csv:
-        info_df.to_csv(DIR_INFO, index = False)
-        lang_genre_df.to_csv(DIR_LANG_GENRE, index = False)
-        tag_df.to_csv(DIR_TAG, index = False)
-        time_value_df.to_csv(DIR_TIME_VALUE, index = False)
-    
-    if to_sql:
-        
-        make_DBs()
-        conn = get_connection(db = MYSQL_DB)
-        
-        info_df.to_sql(TABLE_INFO, con = conn, if_exists = 'append', index = False)
-        lang_genre_df.to_sql(TABLE_LANG_GENRE, con = conn, if_exists = 'append', index = False)
-        time_value_df.to_sql(TABLE_TIME_VALUE, con = conn, if_exists = 'append', index = False)
-        
-        tag_df['tags'] = tag_df['tags'].apply(json.dumps)
-        tag_df.to_sql(TABLE_TAG, con = conn, if_exists = 'append', index = False)
-        conn.close()
-        
 
-def add_no_time_data_to_db(detail_df, to_csv = True, to_sql = True):
+def add_no_time_data_to_db(conn, detail_df, to_csv = True, to_sql = True):
     """
     get_detail로 얻은 디테일에 대한 데이터 중, 시간에 관계 없는 3개의 테이블에 데이터 추가
     새로운 게임이 생겼을 때만 사용
@@ -319,18 +296,17 @@ def add_no_time_data_to_db(detail_df, to_csv = True, to_sql = True):
     
     if to_sql:
         
-        conn = get_connection(db = MYSQL_DB)
-    
+        q = f'USE {MYSQL_DB}'
+        conn.execute(q)
+        
         info_df.to_sql(TABLE_INFO, con = conn, if_exists = 'append', index = False)
         lang_genre_df.to_sql(TABLE_LANG_GENRE, con = conn, if_exists = 'append', index = False)
         
         tag_df['tags'] = tag_df['tags'].apply(json.dumps)
         tag_df.to_sql(TABLE_TAG, con = conn, if_exists = 'append', index = False)
         
-        conn.close()
-        
-    
-def add_time_data_to_db(detail_df, to_csv = True, to_sql = True):
+          
+def add_time_data_to_db(conn, detail_df, to_csv = True, to_sql = True):
     """
     get_detail로 얻은 디테일 데이터 중 시간에 관계 있는 테이블에 데이터 추가
     매일 모든 데이터에 대해 실행됨
@@ -343,14 +319,48 @@ def add_time_data_to_db(detail_df, to_csv = True, to_sql = True):
     
     if to_sql:
         
-        conn = get_connection(db = MYSQL_DB)
-        # db_connection_str = f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PW}@{MYSQL_HOST}/{MYSQL_DB}'
-        # engine = create_engine(db_connection_str, encoding = 'utf-8')
-        # conn = engine.connect()
+        q = f'USE {MYSQL_DB}'
+        conn.execute(q)
+
+        time_value_df.to_sql(TABLE_TIME_VALUE, con = conn, if_exists = 'append', index = False)
+
         
+def create_table(conn, conn_raw, df, to_csv = True, to_sql = True, test = False):
+
+    """
+    최초 실행 시 오늘의 모든 데이터를 받은 다음, SQL&csv에 저장함
+    """
+    
+    appid = df['appid']
+    detail_df = get_details(conn_raw, appid, to_csv = True, to_sql = True, test = test)
+    
+    info_df = detail_df[COLUMNS_INFO]
+    lang_genre_df = detail_df[COLUMNS_LANG_GENRE]
+    tag_df = detail_df[COLUMNS_TAG]
+    time_value_df = detail_df[COLUMNS_TIME_VALUE]
+    
+    if to_csv:
+        info_df.to_csv(DIR_INFO, index = False)
+        lang_genre_df.to_csv(DIR_LANG_GENRE, index = False)
+        tag_df.to_csv(DIR_TAG, index = False)
+        time_value_df.to_csv(DIR_TIME_VALUE, index = False)
+    
+    if to_sql:
+        
+        make_DBs(conn)
+        
+        q = f'USE {MYSQL_DB}'
+        conn.execute(q)
+        
+        info_df.to_sql(TABLE_INFO, con = conn, if_exists = 'append', index = False)
+        lang_genre_df.to_sql(TABLE_LANG_GENRE, con = conn, if_exists = 'append', index = False)
         time_value_df.to_sql(TABLE_TIME_VALUE, con = conn, if_exists = 'append', index = False)
         
-        conn.close()
+        tag_df['tags'] = tag_df['tags'].apply(json.dumps)
+        tag_df.to_sql(TABLE_TAG, con = conn, if_exists = 'append', index = False)
+        
+
+
         
 def check_CS_GO_values(conn):
     
@@ -378,8 +388,8 @@ def check_CS_GO_values(conn):
         return False
     
 
-def check_today_executed(by = 'sql'):
-    
+def check_today_executed(conn, by = 'sql'):
+        
     """
     이미 실행되었는가를 판단함 : 가지고 있는 csv 파일이나 테이블을 이용
     0 : 오늘 실행되지 않았으면서 기존에 실행된 적 있음
@@ -407,16 +417,8 @@ def check_today_executed(by = 'sql'):
         return 0
     
     if by == 'sql':
-        
-        try:
-            conn = get_connection(db = MYSQL_DB)
-
-        except OperationalError:
-            print("DB가 없음 : 첫 실행")
-            return "First"
 
         try:
-            
             executed = check_CS_GO_values(conn)
             
             if executed:
@@ -427,33 +429,19 @@ def check_today_executed(by = 'sql'):
                 print("웹의 정보와 SQL의 정보가 다름")
                 return 0
             
-#             query = "SELECT date FROM time_value ORDER BY 1 DESC LIMIT 1"
-            
-#             last_date = conn.execute(query).fetchall()[0][0]
-
-#             if today == last_date:
-#                 print("어제의 정보가 테이블에 이미 있음 : 오늘 이미 실행되었음")
-#                 return 1
-
-#             print("어제의 정보가 테이블에 없음 : 데이터 수집 실행")
-#             return 0
-
         except (ProgrammingError, TypeError, IndexError): # 데이터가 없는 경우
             print("테이블이 없거나 테이블에 정보가 없음 : 첫 실행")
             return "First"
 
-        
 
-def make_DBs():
+def make_DBs(conn):
     """
     첫 실행 시 create_csv 내에 포함되어 
     MYSQL 4개의 테이블에 포함되는 데이터
     """
-    conn = get_connection()
     create_raw_db(conn)
     create_main_db(conn)
-    
-    conn.close()
+
 
 def create_raw_db(conn):
     """
@@ -579,42 +567,62 @@ def create_main_db(conn):
     conn.execute(q_make_time_value)
     conn.execute(q_make_lang_genre)
     conn.execute(q_make_tag)
-
-
-
-def main_func():
-
-    TO_CSV = False
-    TO_SQL = True
     
+def main_func(test = False, TO_CSV = False, TO_SQL = True):
 
-    if MYSQL_DB == 'STEAMTEST':
-        test = True # test = True라면 100개의 데이터만 detail 수집함 / 이미 있다면 그냥 이용함
-        print("테스트 중")
 
+    # 엔진을 띄움
+    try:
+        engine = get_engine(db = MYSQL_DB)
+        engine_raw = get_engine(db = MYSQL_DB_RAW)
+        
+        conn = engine.connect()
+        conn_raw = engine_raw.connect()
+        
+    except OperationalError as e:
+        
+        error_code = e.orig.args[0]
+        
+        if error_code == 1049: # DB가 없는 경우 만들고, 다시 연결해준다
+            engine_temp = get_engine()
+            conn_temp = engine_temp.connect()
+            
+            create_main_db(conn_temp)
+            create_raw_db(conn_temp)
+            
+            engine_temp.dispose()
+            
+            engine = get_engine(db = MYSQL_DB)
+            engine_raw = get_engine(db = MYSQL_DB_RAW)
+
+            conn = engine.connect()
+            conn_raw = engine_raw.connect()
+        
+    
     # 0(실행X), 1(실행O), "First"(최초 실행) 반환, 1인 경우 아예 실행 X
-    today_executed = check_today_executed(by = 'sql') 
+    today_executed = check_today_executed(conn, by = 'sql') 
 
     if today_executed == 0: 
 
-        today_df = get_steamspy_data(to_csv = TO_CSV, to_sql = TO_SQL) # 오늘의 5000개 게임
-
+        today_df = get_steamspy_data(conn_raw, to_csv = TO_CSV, to_sql = TO_SQL, test = test) # 오늘의 5000개 게임
 
         # 사이트가 이상한 경우
         if type(today_df) == bool: 
+            
             print("사이트가 제대로 작동하지 않음 : 갖고 있는 데이터만 수집")
-            conn = get_connection(db = MYSQL_DB)
-
+            q = f'USE {MYSQL_DB};'
+            conn.execute(q)
+            
             q = f"SELECT appid FROM {TABLE_INFO};"
             appid = pd.read_sql(q, conn)['appid']
 
-            detail_df = get_details(appid)            
-            add_time_data_to_db(detail_df, to_csv = TO_CSV, to_sql = TO_SQL)
+            detail_df = get_details(conn_raw, appid, test = test)            
+            add_time_data_to_db(conn, detail_df, to_csv = TO_CSV, to_sql = TO_SQL )
 
         # 사이트가 멀쩡한 경우
         else:
             print("사이트 작동 O, 오늘자 데이터들 갱신")
-            add_data_to_db(today_df, to_csv = TO_CSV, to_sql = TO_SQL)
+            add_data_to_db(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL )
 
 
     # 아예 처음 실행되는 경우
@@ -622,16 +630,29 @@ def main_func():
 
         print("최초 실행")
 
-        today_df = get_steamspy_data(to_csv = TO_CSV, to_sql = TO_SQL)
+        today_df = get_steamspy_data(conn_raw, to_csv = TO_CSV, to_sql = TO_SQL, test = test)
 
         if type(today_df) == bool: 
             print("현재 정상적으로 조회되지 않는 상황이므로 내일 다시 실행해주세요")
 
         else:
-            create_table(today_df, to_csv = TO_CSV, to_sql = TO_SQL)
+            create_table(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL, test = test)
+
+            
+    conn.close()
+    conn_raw.close()
+    engine.dispose()
+    engine_raw.dispose()
+    
+    print("6시간 후에 재실행됨")
 
 test = False
-main_func()
+
+if MYSQL_DB != 'steam':
+    test = True # test = True라면 100개의 데이터만 detail 수집함 / 이미 있다면 그냥 이용함
+    print("테스트 중")
+
+main_func(test, TO_CSV = False, TO_SQL = True)
 schedule.every(6).hours.do(main_func)
 while True:
     schedule.run_pending()
