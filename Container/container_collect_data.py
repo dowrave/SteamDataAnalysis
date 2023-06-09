@@ -790,6 +790,7 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
     print(f"{N}시간 후 다시 실행됨")
 
 if __name__ == "__main__":
+    print("스크립트 실행")
     test = False
 
     if MYSQL_DB != 'steam':

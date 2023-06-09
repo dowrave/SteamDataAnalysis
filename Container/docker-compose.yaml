@@ -32,8 +32,9 @@ services:
     command: sh -c "while ! mysqladmin -u$MYSQL_ROOT_USER \
                       -p$MYSQL_ROOT_PASSWORD -h steamspy-mysql ping --silent; \
                       do sleep 1; done && 
-                      python container_collect_data.py" && \
-                      python check_time.py
+                      python check_time.py && \ 
+                      python -u container_collect_data.py"
+
 
 networks:
   default:
