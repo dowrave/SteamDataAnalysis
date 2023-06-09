@@ -9,6 +9,8 @@ import schedule
 from sqlalchemy import create_engine
 from sqlalchemy.exc import ProgrammingError, OperationalError
 import json
+import sys
+from requests.exceptions import RequestException
 
 import container_mysql_info
 
@@ -32,23 +34,23 @@ DIR_RAW = 'daily_raw_data/'
 # 컨테이너 실행 시 인자를 받음(굳이 구현 안해도 되긴 하는데, 공부할 겸)
 parser = ArgumentParser()  
 parser.add_argument("--db-host", # 인자를 어떻게 받을 지
-                    dest="MYSQL_host",  # 받는 인자는 args.dest 라는 변수로 들어감
+                    dest="host",  # 받는 인자는 args.dest 라는 변수로 들어감
                     type=str, 
-                    default="localhost") 
+                    default="steamspy-mysql") 
 
 args = parser.parse_args()
 
-MYSQL_HOST = args.MYSQL_host # 디폴트 : localhost이며 다른 인자가 들어오면 그걸 취함
+MYSQL_HOST = args.host # 디폴트 : localhost이며 다른 인자가 들어오면 그걸 취함
 MYSQL_USER = container_mysql_info.user
 MYSQL_PW = container_mysql_info.password
 MYSQL_PORT = container_mysql_info.port
 
-# MYSQL_DB = container_mysql_info.db
-# MYSQL_DB_RAW = container_mysql_info.db_raw
+MYSQL_DB = container_mysql_info.db
+MYSQL_DB_RAW = container_mysql_info.db_raw
 
 # 테스트용 DB
-MYSQL_DB = 'aggro'
-MYSQL_DB_RAW = 'aggro_raw'
+# MYSQL_DB = 'aggro'
+# MYSQL_DB_RAW = 'aggro_raw'
 
 TABLE_INFO = 'info'
 TABLE_TIME_VALUE = 'time_value'
@@ -56,12 +58,13 @@ TABLE_LANG_GENRE = 'lang_genre'
 TABLE_TAG = 'tag'
 TABLE_RAW = 'raw'
 TABLE_RAW_DETAIL = 'raw_detail'
+TABLE_RAW_CHECKPOINT = 'checkpoint'
 
 # 컨테이너 버전은 얘도 함수에 같이 포함시켰다. 차이가 있는 거 유의하면서 작업하자.
 def get_engine(host = MYSQL_HOST,
                 user = MYSQL_USER,
                 password = MYSQL_PW,
-                port = MYSQL_PORT,
+               port = MYSQL_PORT,
                 db = None):
     
     """sqlalchemy을 이용해 create_engine.connect() 객체를 반환"""
@@ -114,7 +117,7 @@ def check_today_raw_data(conn, by='sql', check_table = TABLE_RAW):
         return True
 
 
-def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
+def get_steamspy_data(conn, N = 5, to_csv = False, to_sql = True, test = False):
 
     """
     steamspypi를 이용해 보유자 수 기준 상위 5000개 데이터 수집해서 데이터 프레임 반환
@@ -127,8 +130,6 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
     
     if need_to_collect == False: # 이미 SQL이나 DB에 데이터가 있다
         
-        q = f"USE {STEAM_DB_RAW}"
-        conn.execute(q)
         q = f"""SELECT * FROM {TABLE_RAW} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
         df = pd.read_sql(q, conn)
     
@@ -178,69 +179,178 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
     return df
 
 
-def get_details(conn, appids: iter, to_csv = True, to_sql = True, test = False):
+def log_checkpoint(conn_raw, idx):
+    """
+    get_detail 중 steamspy와의 통신과정에서 오류가 발생했을 경우
+    오류가 발생한 인덱스를 raw db의 checkpoint에 저장함
+    """
+    q = f"INSERT INTO {TABLE_RAW_CHECKPOINT} (checkpoint_idx) VALUES (%s)"
+    conn_raw.execute(q, (idx,))
+
+    
+def load_checkpoint(conn_raw):
+    
+    try:
+        q = f"SELECT checkpoint_idx FROM {TABLE_RAW_CHECKPOINT}"
+        checkpoint = conn_raw.execute(q).fetchone()[0]
+        return checkpoint
+    
+    except TypeError:
+        return False
+
+
+def del_checkpoint(conn_raw):
+    q = f"DELETE FROM {TABLE_RAW_CHECKPOINT}"
+    conn_raw.execute(q)
+
+
+
+def check_today_raw_detail_data(conn_raw, appids):
+    """
+    체크포인트에 값이 있으면 중간에 실행 정지된 거라서 데이터를 더 수집해야 함
+    체크포인트에 값이 없는 경우, 추가로 체크해야 할 항목
+        - RAW_DETAIL의 어제 날짜에 저장된 길이가 appids에 들어온 길이와 같은가?
+        - 같다면 모두 수집되었으므로 수집 필요 x
+        - 다르다면 오늘 실행된 적이 없는 거니까 수집해야 함
+    """
+    today = datetime.today().date() - timedelta(days = 1)
+    idx = load_checkpoint(conn_raw)
+    
+    # 중단된 적 있는 경우
+    if idx == True:
+        return True
+    
+    else:
+        q = f"SELECT COUNT(*) FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
+        check = conn_raw.execute(q).fetchone()[0]
+        
+        if len(appids) == check:
+            return False
+        
+        else:
+            return True
+
+
+        
+        
+def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = False):
     """
     genre, language, tag를 수집 -> "Raw_detail"에 저장
     """
-    need_to_collect = check_today_raw_data(conn, check_table = TABLE_RAW_DETAIL)
+    
+    need_to_collect = check_today_raw_detail_data(conn_raw, appids)
+    
     
     if test:
         appids = appids[:100]
         
     if need_to_collect == False:
-
         q = f"""SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
-        detail_df = pd.read_sql(q, conn)
-    
+        detail_df = pd.read_sql(q, conn_raw)
+        return detail_df
     
     
     else:
+        
+        checkpoint_idx = load_checkpoint(conn_raw)
+        if checkpoint_idx:
+            appids = appids[checkpoint_idx:]
+        
+        
         print(f"appdetails 수집 - 예정 소요 시간 : {len(appids)}초")
 
         temp_lst = []
         today = datetime.today().date() - timedelta(days = 1)
-        
-        
+
         for count, i in enumerate(appids):
+            try:
+                data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
+                data = steamspypi.download(data_request)
 
-            data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
-            data = steamspypi.download(data_request)
+                temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
 
-            temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
+                if type(temp_df) == False:
+                    print("요청 에러가 발생해서 데이터 수집을 종료합니다")
+                    return False
 
-            if type(temp_df) == False:
-                print("요청 에러가 발생해서 데이터 수집을 종료합니다")
-                return False
+                temp_lst.append(temp_df)
 
-            temp_lst.append(temp_df)
+                if count % 50 == 0:
+                    print(i)
+                    print(f"{count}번째 데이터 작업 중")
 
-            if count % 50 == 0:
-                print(i)
-                print(f"{count}번째 데이터 작업 중")
+                if count % 500 == 0 and to_sql:
+                    print("500개의 데이터마다 저장합니다")
+                    detail_df = pd.concat(temp_lst)
+                    detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+
+                    detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+
+                    temp_df = detail_df.copy()
+                    temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+
+                    temp_df.to_sql(TABLE_RAW_DETAIL, 
+                                   con = conn_raw, 
+                                   if_exists = 'append', 
+                                   index = False)
+                    
+                    del_checkpoint(conn_raw)
+                    log_checkpoint(conn_raw, count)
+                    
+                    temp_lst = []
+                
+            except RequestException:
+                
+                # steamspy에서 불러오는 함수에 에러가 발생한 경우를 가정함
+                # 현재 temp_lst에 있는 데이터들을 저장하고, 체크포인트를 넣어둠
+                
+                detail_df = pd.concat(temp_lst)
+                detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+
+                detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+
+                temp_df = detail_df.copy()
+                temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+
+                temp_df.to_sql(TABLE_RAW_DETAIL, 
+                               con = conn_raw, 
+                               if_exists = 'append', 
+                               index = False)
+                
+                del_checkpoint(conn_raw) 
+                log_checkpoint(conn_raw, count)
+                
+                sys.exit(1)
+           
 
         detail_df = pd.concat(temp_lst)
         detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
 
         detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
     
-        # detail_df['discount'] = detail_df[detail_df['discount'].isnull()]['discount'].fillna(0)
+        # SQL에 수집된 데이터 이용하기
+        q = f"SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
+        today_detail_df = pd.read_sql(q, conn_raw)
+        today_detail_df['tags'] = today_detail_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+            
+        if to_csv:
+            today_detail_df.to_csv(DIR_RAW + f"detail_{today.strftime('%Y%m%d')}.csv",
+                            index = False)
+        if to_sql:
+            
+
+            today_detail_df.to_sql(TABLE_RAW_DETAIL, 
+                            con = conn_raw, 
+                            if_exists = 'append', 
+                            index = False)
+            
+            del_checkpoint(conn_raw) 
+        
+        
+        
+        print("수집 및 불러오기 종료")
     
-    if to_csv:
-        detail_df.to_csv(DIR_RAW + f"detail_{today.strftime('%Y%m%d')}.csv",
-                        index = False)
-    if to_sql:
-        
-        temp_df = detail_df.copy()
-        temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
-        
-        temp_df.to_sql(TABLE_RAW_DETAIL, 
-                       con = conn, 
-                       if_exists = 'append', 
-                       index = False)
-        
-    print("수집 종료")
-    
-    return detail_df
+        return today_detail_df
 
 def erase_duplicate(df):
     """
@@ -250,7 +360,7 @@ def erase_duplicate(df):
 
     return df_return
 
-def add_data_to_db(conn, conn_raw, df, check_data = 'sql', to_csv = True, to_sql = True):
+def add_data_to_db(conn, conn_raw, df, check_data = 'sql', to_csv = False, to_sql = True):
     
     """
     이미 데이터가 있을 때 새로 얻은 데이터들을 나눠서 저장
@@ -294,7 +404,7 @@ def add_data_to_db(conn, conn_raw, df, check_data = 'sql', to_csv = True, to_sql
     add_time_data_to_db(conn, today_time_value_df, to_csv = to_csv, to_sql = to_sql)
 
 
-def add_no_time_data_to_db(conn, detail_df, to_csv = True, to_sql = True):
+def add_no_time_data_to_db(conn, detail_df, to_csv = False, to_sql = True):
     """
     get_detail로 얻은 디테일에 대한 데이터 중, 시간에 관계 없는 3개의 테이블에 데이터 추가
     새로운 게임이 생겼을 때만 사용
@@ -518,9 +628,17 @@ def create_raw_db(conn):
             date DATE NOT NULL
     );
     """
+    
+    q_make_checkpoint = f"""
+        CREATE TABLE IF NOT EXISTS {TABLE_RAW_CHECKPOINT} (
+            id SMALLINT AUTO_INCREMENT PRIMARY KEY,
+            checkpoint_idx INT
+        )
+    """
+    
     conn.execute(q_make_raw)
-    conn.execute(q_make_raw_detail)    
-
+    conn.execute(q_make_raw_detail)
+    conn.execute(q_make_checkpoint)
 
 def create_main_db(conn):
     """가공한 데이터를 보관하는 DB를 만듦"""
@@ -583,38 +701,46 @@ def create_main_db(conn):
     conn.execute(q_make_tag)
     
 def main_func(test = False, TO_CSV = False, TO_SQL = True):
-    
-    print(MYSQL_HOST, MYSQL_USER, MYSQL_PW, MYSQL_PORT)
 
+    # time.sleep(5)
     # 엔진을 띄움
-    try:
-        engine = get_engine(db = MYSQL_DB)
-        engine_raw = get_engine(db = MYSQL_DB_RAW)
+    get_connect = False
+    while get_connect == False:
         
-        conn = engine.connect()
-        conn_raw = engine_raw.connect()
-        
-    except OperationalError as e:
-        
-        error_code = e.orig.args[0]
-        print("MySQL 에러 코드 : ", error_code)
-        if error_code == 1049: # DB가 없는 경우 만들고, 다시 연결해준다
-            engine_temp = get_engine()
-            conn_temp = engine_temp.connect()
-            
-            print(f"{MYSQL_DB}, {MYSQL_DB_RAW} 2개의 DB를 새로 생성합니다.")
-            create_main_db(conn_temp)
-            create_raw_db(conn_temp)
-            
-            engine_temp.dispose()
-            
+        try:
             engine = get_engine(db = MYSQL_DB)
             engine_raw = get_engine(db = MYSQL_DB_RAW)
-
+            
             conn = engine.connect()
             conn_raw = engine_raw.connect()
+            get_connect = True
+            
+        except OperationalError as e:
+            
+            error_code = e.orig.args[0]
+            print(error_code)
+            
+            if error_code == 1049: # DB가 없는 경우 만들고, 다시 연결해준다
+                engine_temp = get_engine()
+                conn_temp = engine_temp.connect()
+                
+                create_main_db(conn_temp)
+                create_raw_db(conn_temp)
+                
+                engine_temp.dispose()
+                
+                engine = get_engine(db = MYSQL_DB)
+                engine_raw = get_engine(db = MYSQL_DB_RAW)
+
+                conn = engine.connect()
+                conn_raw = engine_raw.connect()
+                
+                get_connect = True
+            
+            elif error_code == 2003:
+                time.sleep(1)
+                continue
         
-    print(conn)
     
     # 0(실행X), 1(실행O), "First"(최초 실행) 반환, 1인 경우 아예 실행 X
     today_executed = check_today_executed(conn, by = 'sql') 
@@ -631,15 +757,15 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
             conn.execute(q)
             
             q = f"SELECT appid FROM {TABLE_INFO};"
-            appid = pd.read_sql(q, conn)['appid']
+            appid = pd.read_sql(q, conn)['appid'].sort_values()
 
             detail_df = get_details(conn_raw, appid, test = test)            
-            add_time_data_to_db(conn, detail_df, to_csv = TO_CSV, to_sql = TO_SQL )
+            add_time_data_to_db(conn, detail_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
         # 사이트가 멀쩡한 경우
         else:
             print("사이트 작동 O, 오늘자 데이터들 갱신")
-            add_data_to_db(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL )
+            add_data_to_db(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
 
     # 아예 처음 실행되는 경우
@@ -660,17 +786,20 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
     conn_raw.close()
     engine.dispose()
     engine_raw.dispose()
+    global N
+    print(f"{N}시간 후 다시 실행됨")
 
-test = False
+if __name__ == "__main__":
+    test = False
 
-if MYSQL_DB != 'steam':
-    test = True # test = True라면 100개의 데이터만 detail 수집함 / 이미 있다면 그냥 이용함
-    print("테스트 중")
+    if MYSQL_DB != 'steam':
+        test = True # test = True라면 100개의 데이터만 detail 수집함 / 이미 있다면 그냥 이용함
+        print("테스트 중")
 
+    N = 6
 
-
-main_func(test, TO_CSV = False, TO_SQL = True)
-schedule.every(6).hours.do(main_func)
-while True:
-    schedule.run_pending()
-    time.sleep(1) # 짧게 잡는 게 좋단다..
+    main_func(test)
+    schedule.every(N).hours.do(main_func)
+    while True:
+        schedule.run_pending()
+        time.sleep(1) # 짧게 잡는 게 좋단다..

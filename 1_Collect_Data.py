@@ -10,7 +10,8 @@ import json
 import schedule
 from my_module import get_connection
 import mysql_info
-
+import sys
+from requests.exceptions import RequestException
 # import pymysql # sqlalchemy에서 사용하기 떄문에 설치는 필요함
 
 
@@ -30,6 +31,7 @@ DIR_RAW = 'daily_raw_data/'
 MYSQL_HOST = mysql_info.host
 MYSQL_USER = mysql_info.user
 MYSQL_PW = mysql_info.password
+MYSQL_PORT = 3306
 MYSQL_DB = mysql_info.db
 MYSQL_DB_RAW = mysql_info.db_raw
 
@@ -43,19 +45,21 @@ TABLE_LANG_GENRE = 'lang_genre'
 TABLE_TAG = 'tag'
 TABLE_RAW = 'raw'
 TABLE_RAW_DETAIL = 'raw_detail'
+TABLE_RAW_CHECKPOINT = 'checkpoint'
 
 # 컨테이너 버전은 얘도 함수에 같이 포함시켰다. 차이가 있는 거 유의하면서 작업하자.
 def get_engine(host = MYSQL_HOST,
                 user = MYSQL_USER,
                 password = MYSQL_PW,
+               port = MYSQL_PORT,
                 db = None):
     
     """sqlalchemy을 이용해 create_engine.connect() 객체를 반환"""
     
     if db == None:
-        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/'
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}:{port}/'
     else:
-        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}/{db}'
+        db_connection_str = f'mysql+pymysql://{user}:{password}@{host}:{port}/{db}'
     
     engine = create_engine(db_connection_str, encoding = 'utf-8')    
     return engine
@@ -113,8 +117,6 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
     
     if need_to_collect == False: # 이미 SQL이나 DB에 데이터가 있다
         
-        q = f"USE {STEAM_DB_RAW}"
-        conn.execute(q)
         q = f"""SELECT * FROM {TABLE_RAW} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
         df = pd.read_sql(q, conn)
     
@@ -164,69 +166,175 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
     return df
 
 
-def get_details(conn, appids: iter, to_csv = True, to_sql = True, test = False):
+def log_checkpoint(conn_raw, idx):
+    """
+    get_detail 중 steamspy와의 통신과정에서 오류가 발생했을 경우
+    오류가 발생한 인덱스를 raw db의 checkpoint에 저장함
+    """
+    q = f"INSERT INTO {TABLE_RAW_CHECKPOINT} (checkpoint_idx) VALUES (%s)"
+    conn_raw.execute(q, (idx,))
+
+    
+def load_checkpoint(conn_raw):
+    
+    try:
+        q = f"SELECT checkpoint_idx FROM {TABLE_RAW_CHECKPOINT}"
+        checkpoint = conn_raw.execute(q).fetchone()[0]
+        return checkpoint
+    
+    except TypeError:
+        return False
+
+
+def del_checkpoint(conn_raw):
+    q = f"DELETE FROM {TABLE_RAW_CHECKPOINT}"
+    conn_raw.execute(q)
+
+
+
+def check_today_raw_detail_data(conn_raw, appids):
+    """
+    체크포인트에 값이 있으면 중간에 실행 정지된 거라서 데이터를 더 수집해야 함
+    체크포인트에 값이 없는 경우, 추가로 체크해야 할 항목
+        - RAW_DETAIL의 어제 날짜에 저장된 길이가 appids에 들어온 길이와 같은가?
+        - 같다면 모두 수집되었으므로 수집 필요 x
+        - 다르다면 오늘 실행된 적이 없는 거니까 수집해야 함
+    """
+    today = datetime.today().date() - timedelta(days = 1)
+    idx = load_checkpoint(conn_raw)
+    
+    # 중단된 적 있는 경우
+    if idx == True:
+        return True
+    
+    else:
+        q = f"SELECT COUNT(*) FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
+        check = conn_raw.execute(q).fetchone()[0]
+        
+        if len(appids) == check:
+            return False
+        
+        else:
+            return True
+
+
+        
+        
+def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = False):
     """
     genre, language, tag를 수집 -> "Raw_detail"에 저장
     """
-    need_to_collect = check_today_raw_data(conn, check_table = TABLE_RAW_DETAIL)
+    
+    need_to_collect = check_today_raw_detail_data(conn_raw, appids)
+    
     
     if test:
         appids = appids[:100]
         
     if need_to_collect == False:
-
         q = f"""SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
-        detail_df = pd.read_sql(q, conn)
-    
+        detail_df = pd.read_sql(q, conn_raw)
+        return detail_df
     
     
     else:
+        
+        checkpoint_idx = load_checkpoint(conn_raw)
+        if checkpoint_idx:
+            appids = appids[checkpoint_idx:]
+        
+        
         print(f"appdetails 수집 - 예정 소요 시간 : {len(appids)}초")
 
         temp_lst = []
         today = datetime.today().date() - timedelta(days = 1)
-        
-        
+
         for count, i in enumerate(appids):
+            try:
+                data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
+                data = steamspypi.download(data_request)
 
-            data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
-            data = steamspypi.download(data_request)
+                temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
 
-            temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
+                if type(temp_df) == False:
+                    print("요청 에러가 발생해서 데이터 수집을 종료합니다")
+                    return False
 
-            if type(temp_df) == False:
-                print("요청 에러가 발생해서 데이터 수집을 종료합니다")
-                return False
+                temp_lst.append(temp_df)
 
-            temp_lst.append(temp_df)
+                if count > 0:
+                    if count % 50 == 0:
+                        print(i)
+                        print(f"{count}번째 데이터 작업 중")
 
-            if count % 50 == 0:
-                print(i)
-                print(f"{count}번째 데이터 작업 중")
+                    if count % 500 == 0 and to_sql:
+                        print("500개의 데이터마다 저장합니다")
+                        detail_df = pd.concat(temp_lst)
+                        detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+
+                        detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+
+                        temp_df = detail_df.copy()
+                        temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+
+                        temp_df.to_sql(TABLE_RAW_DETAIL, 
+                                    con = conn_raw, 
+                                    if_exists = 'append', 
+                                    index = False)
+                        
+                        temp_lst = []
+                
+            except RequestException:
+                
+                # steamspy에서 불러오는 함수에 에러가 발생한 경우를 가정함
+                # 현재 temp_lst에 있는 데이터들을 저장하고, 체크포인트를 넣어둠
+                
+                detail_df = pd.concat(temp_lst)
+                detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+
+                detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+
+                temp_df = detail_df.copy()
+                temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+
+                temp_df.to_sql(TABLE_RAW_DETAIL, 
+                               con = conn_raw, 
+                               if_exists = 'append', 
+                               index = False)
+                
+                del_checkpoint(conn_raw) 
+                log_checkpoint(conn_raw, count)
+                
+                sys.exit(1)
+           
 
         detail_df = pd.concat(temp_lst)
         detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
 
         detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
     
-        # detail_df['discount'] = detail_df[detail_df['discount'].isnull()]['discount'].fillna(0)
     
     if to_csv:
         detail_df.to_csv(DIR_RAW + f"detail_{today.strftime('%Y%m%d')}.csv",
                         index = False)
     if to_sql:
         
-        temp_df = detail_df.copy()
-        temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+        q = f"SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
+        today_detail_df = pd.read_sql(q, conn_raw)
         
-        temp_df.to_sql(TABLE_RAW_DETAIL, 
-                       con = conn, 
+        today_detail_df['tags'] = today_detail_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+        
+        today_detail_df.to_sql(TABLE_RAW_DETAIL, 
+                       con = conn_raw, 
                        if_exists = 'append', 
                        index = False)
         
+        del_checkpoint(conn_raw) 
+        
+
     print("수집 종료")
     
-    return detail_df
+    return today_detail_df
 
 def erase_duplicate(df):
     """
@@ -504,9 +612,17 @@ def create_raw_db(conn):
             date DATE NOT NULL
     );
     """
+    
+    q_make_checkpoint = f"""
+        CREATE TABLE IF NOT EXISTS {TABLE_RAW_CHECKPOINT} (
+            id SMALLINT AUTO_INCREMENT PRIMARY KEY,
+            checkpoint_idx INT
+        )
+    """
+    
     conn.execute(q_make_raw)
-    conn.execute(q_make_raw_detail)    
-
+    conn.execute(q_make_raw_detail)
+    conn.execute(q_make_checkpoint)
 
 def create_main_db(conn):
     """가공한 데이터를 보관하는 DB를 만듦"""
@@ -614,15 +730,15 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
             conn.execute(q)
             
             q = f"SELECT appid FROM {TABLE_INFO};"
-            appid = pd.read_sql(q, conn)['appid']
+            appid = pd.read_sql(q, conn)['appid'].sort_values()
 
             detail_df = get_details(conn_raw, appid, test = test)            
-            add_time_data_to_db(conn, detail_df, to_csv = TO_CSV, to_sql = TO_SQL )
+            add_time_data_to_db(conn, detail_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
         # 사이트가 멀쩡한 경우
         else:
             print("사이트 작동 O, 오늘자 데이터들 갱신")
-            add_data_to_db(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL )
+            add_data_to_db(conn, conn_raw, today_df, to_csv = TO_CSV, to_sql = TO_SQL)
 
 
     # 아예 처음 실행되는 경우

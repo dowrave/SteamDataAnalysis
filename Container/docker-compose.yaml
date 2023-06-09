@@ -3,6 +3,8 @@ services:
   steamspy-mysql:
     image: mysql:8.0.33
     container_name: steamspy-mysql
+    hostname: steamspy-mysql
+    restart: always
     ports:
       - 33060:3306
     environment:
@@ -11,7 +13,7 @@ services:
       TZ: ${TZ}
     # SQL이 켜진 다음 collector 수집 체크
     healthcheck:
-      test: ["CMD", "mysqladmin", "-u$MYSQL_ROOT_USER", "-p$MYSQL_ROOT_PASSWORD", "ping", "-h", "localhost"]
+      test: ['CMD', 'mysqladmin', '-u$MYSQL_ROOT_USER', '-p$MYSQL_ROOT_PASSWORD', 'ping', '-h', 'localhost']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,10 +23,17 @@ services:
       context: .
       dockerfile: dockerfile
     container_name: steamspy-collector
+    restart: always
     depends_on:
       steamspy-mysql:
         condition: service_healthy
-    command: ["steamspy-mysql"]
+    environment:
+      TZ: "Asia/Seoul" 
+    command: sh -c "while ! mysqladmin -u$MYSQL_ROOT_USER \
+                      -p$MYSQL_ROOT_PASSWORD -h steamspy-mysql ping --silent; \
+                      do sleep 1; done && 
+                      python container_collect_data.py" && \
+                      python check_time.py
 
 networks:
   default:
