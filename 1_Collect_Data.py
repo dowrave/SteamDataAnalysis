@@ -14,6 +14,7 @@ import sys
 from requests.exceptions import RequestException
 # import pymysql # sqlalchemy에서 사용하기 떄문에 설치는 필요함
 
+pd.set_option('mode.chained_assignment',  None)
 
 COLUMNS_INFO = ['appid', 'name', 'developer', 'publisher', 'initialprice']
 COLUMNS_TIME_VALUE = ['appid', 'name', 'date', 'ccu', 'positive', 'negative', 
@@ -154,8 +155,7 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
     df = pd.concat(lst) 
     df = df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
     df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
-    df = erase_duplicate(df)
-    
+    df = df.drop_duplicates(subset = ['appid'])
     if to_csv:
         df.to_csv(f'daily_raw_data/raw_{today.strftime("%Y%m%d")}.csv', index = False)
     
@@ -217,10 +217,24 @@ def check_today_raw_detail_data(conn_raw, appids):
         else:
             return True
 
+def save_detail_to_sql(conn, lst, today):
+    """
+    get_detail() 에서만 쓰임 / 수집된 raw_detail 데이터 sql에 저장
+    """
+    detail_df = pd.concat(lst)
+    detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+    detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
 
+    temp_df = detail_df.copy()
+    temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
+
+    temp_df.to_sql(TABLE_RAW_DETAIL, 
+                con = conn, 
+                if_exists = 'append', 
+                index = False)
         
         
-def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = False):
+def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = False):
     """
     genre, language, tag를 수집 -> "Raw_detail"에 저장
     """
@@ -230,7 +244,8 @@ def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = Fal
     
     if test:
         appids = appids[:100]
-        
+    
+    
     if need_to_collect == False:
         q = f"""SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today.strftime('%Y-%m-%d')}'"""
         detail_df = pd.read_sql(q, conn_raw)
@@ -250,6 +265,7 @@ def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = Fal
         today = datetime.today().date() - timedelta(days = 1)
 
         for count, i in enumerate(appids):
+            
             try:
                 data_request = {'request' : 'appdetails', 'appid' : f'{i}'}
                 data = steamspypi.download(data_request)
@@ -268,19 +284,21 @@ def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = Fal
                         print(f"{count}번째 데이터 작업 중")
 
                     if count % 500 == 0 and to_sql:
-                        print("500개의 데이터마다 저장합니다")
-                        detail_df = pd.concat(temp_lst)
-                        detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+                        print("500개마다 저장합니다")
+                        
+                        save_detail_to_sql(conn_raw, temp_lst, today)
+                        
+                        # detail_df = pd.concat(temp_lst)
+                        # detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
+                        # detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
 
-                        detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+                        # temp_df = detail_df.copy()
+                        # temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
 
-                        temp_df = detail_df.copy()
-                        temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
-
-                        temp_df.to_sql(TABLE_RAW_DETAIL, 
-                                    con = conn_raw, 
-                                    if_exists = 'append', 
-                                    index = False)
+                        # temp_df.to_sql(TABLE_RAW_DETAIL, 
+                        #             con = conn_raw, 
+                        #             if_exists = 'append', 
+                        #             index = False)
                         
                         temp_lst = []
                 
@@ -289,89 +307,62 @@ def get_details(conn_raw, appids: iter, to_csv = True, to_sql = True, test = Fal
                 # steamspy에서 불러오는 함수에 에러가 발생한 경우를 가정함
                 # 현재 temp_lst에 있는 데이터들을 저장하고, 체크포인트를 넣어둠
                 
-                detail_df = pd.concat(temp_lst)
-                detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
-
-                detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
-
-                temp_df = detail_df.copy()
-                temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
-
-                temp_df.to_sql(TABLE_RAW_DETAIL, 
-                               con = conn_raw, 
-                               if_exists = 'append', 
-                               index = False)
+                save_detail_to_sql(conn_raw, temp_lst, today)
                 
                 del_checkpoint(conn_raw) 
                 log_checkpoint(conn_raw, count)
                 
+                print("에러가 발생해서 체크포인트를 저장하고 프로그램이 일시 종료됩니다")
+                
                 sys.exit(1)
-           
-
-        detail_df = pd.concat(temp_lst)
-        detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
-
-        detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
+        
+        # 마지막 수집 이후 저장
+        
+        save_detail_to_sql(conn_raw, temp_lst, today)
     
-    
-    if to_csv:
-        detail_df.to_csv(DIR_RAW + f"detail_{today.strftime('%Y%m%d')}.csv",
-                        index = False)
-    if to_sql:
-        
-        q = f"SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
-        today_detail_df = pd.read_sql(q, conn_raw)
-        
-        today_detail_df['tags'] = today_detail_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
-        
-        today_detail_df.to_sql(TABLE_RAW_DETAIL, 
-                       con = conn_raw, 
-                       if_exists = 'append', 
-                       index = False)
-        
-        del_checkpoint(conn_raw) 
-        
+        if to_csv:
+            detail_df.to_csv(DIR_RAW + f"detail_{today.strftime('%Y%m%d')}.csv",
+                            index = False)
+        if to_sql:
+            
+            # 500개씩 나눠서 저장한 데이터들을 한꺼번에 불러옴
+            q = f"SELECT * FROM {TABLE_RAW_DETAIL} WHERE date = '{today}'"
+            today_detail_df = pd.read_sql(q, conn_raw)
 
-    print("수집 종료")
-    
-    return today_detail_df
+            del_checkpoint(conn_raw) 
+        
+            print("수집 종료")
+            
+            return today_detail_df
 
-def erase_duplicate(df):
-    """
-    appid의 중복 제거 : name이 같더라도 appid가 다르다면 다른 게임(pk)으로 간주함
-    """
-    df_return = df.drop_duplicates(subset = ['appid'])
-
-    return df_return
-
-def add_data_to_db(conn, conn_raw, df, check_data = 'sql', to_csv = True, to_sql = True):
+def add_data_to_db(conn, conn_raw, today_df, check_data = 'sql', to_csv = True, to_sql = True):
     
     """
     이미 데이터가 있을 때 새로 얻은 데이터들을 나눠서 저장
     인풋 : get_steamspy_data로 얻은 오늘의 데이터프레임
     """
     
+    # 이미 info 테이블에 있는 appid 얻기
     if check_data == 'csv':
         info_df = pd.read_csv(DIR_INFO)
     
-    # SQL
     elif check_data == 'sql':
-        
         q = f"SELECT appid FROM {TABLE_INFO};"
         info_df = pd.read_sql(q, conn)
     
-    # 새로 생긴 appid & 5000위 밖으로 벗어난 appid 정보 얻기
+    # 오늘 새로 생긴 appid와 순위에서 벗어난 appid 수집
     already_appid = info_df['appid']
-    today_appid = df['appid'].unique()
-    oldbie_df = df[df['appid'].isin(already_appid)][:]
+    today_appid = today_df['appid']
+    
+    oldbie_df = today_df[today_df['appid'].isin(already_appid)][:]
     newbie_appid = set(today_appid) - set(oldbie_df['appid']) # 기존에 없다가 5000위 내로 진입
-    print(f"newbie 데이터 수 : {len(newbie_appid)}개")
-    
     outrank_appid = set(already_appid) - set(today_appid) # 기존에 있었으면서 5000위 이탈
-    print(f"outrank 데이터 수 : {len(outrank_appid)}개")
     
+    print(f"새로운 데이터 수 : {len(newbie_appid)}개")
+    print(f"순위 이탈 데이터 수 : {len(outrank_appid)}개")
+    
+    # 순위 이탈 & 진입 데이터를 수집
     additional_appid = newbie_appid | outrank_appid 
-    
     additional_appid = list(additional_appid)
     additional_df = get_details(conn_raw, additional_appid, test = test)
     
@@ -455,11 +446,6 @@ def create_table(conn, conn_raw, df, to_csv = True, to_sql = True, test = False)
     
     if to_sql:
         
-        make_DBs(conn)
-        
-        q = f'USE {MYSQL_DB}'
-        conn.execute(q)
-        
         info_df.to_sql(TABLE_INFO, con = conn, if_exists = 'append', index = False)
         lang_genre_df.to_sql(TABLE_LANG_GENRE, con = conn, if_exists = 'append', index = False)
         time_value_df.to_sql(TABLE_TIME_VALUE, con = conn, if_exists = 'append', index = False)
@@ -541,16 +527,6 @@ def check_today_executed(conn, by = 'sql'):
             print("테이블이 없거나 테이블에 정보가 없음 : 첫 실행")
             return "First"
 
-
-def make_DBs(conn):
-    """
-    첫 실행 시 create_csv 내에 포함되어 
-    MYSQL 4개의 테이블에 포함되는 데이터
-    """
-    create_raw_db(conn)
-    create_main_db(conn)
-
-
 def create_raw_db(conn):
     """
     수집한 데이터를 그대로 보관하는 DB를 만듦
@@ -559,17 +535,6 @@ def create_raw_db(conn):
     # SQLAlchemy를 이용하면 테이블을 파이썬 스크립트로 만들 수 있음
     # 일단 작동엔 이상이 없기 때문에 쿼리 형식을 유지함
 
-    try:
-        q = f"CREATE DATABASE {MYSQL_DB_RAW}"
-        conn.execute(q)
-        q = f"USE {MYSQL_DB_RAW}"
-        conn.execute(q)
-
-    except:
-        q = f"USE {MYSQL_DB_RAW}"
-        conn.execute(q)
-        
-        
     q_make_raw = f"""
             CREATE TABLE IF NOT EXISTS {TABLE_RAW} (
             appid INT NOT NULL, 
@@ -627,15 +592,6 @@ def create_raw_db(conn):
 def create_main_db(conn):
     """가공한 데이터를 보관하는 DB를 만듦"""
     
-    try:
-        q = f"CREATE DATABASE {MYSQL_DB}"
-        conn.execute(q)
-        q_1 = f"USE {MYSQL_DB}"
-        conn.execute(q_1)
-    
-    except:
-        q_1 = f"USE {MYSQL_DB}"
-        conn.execute(q_1)
     
     q_make_info = """
                 CREATE TABLE IF NOT EXISTS info (
@@ -683,11 +639,13 @@ def create_main_db(conn):
     conn.execute(q_make_time_value)
     conn.execute(q_make_lang_genre)
     conn.execute(q_make_tag)
+
+def get_engine_connect():
+    """
+    2개의 DB와 커넥트를 만듦
+    DB가 없다면 만듦
+    """
     
-def main_func(test = False, TO_CSV = False, TO_SQL = True):
-
-
-    # 엔진을 띄움
     try:
         engine = get_engine(db = MYSQL_DB)
         engine_raw = get_engine(db = MYSQL_DB_RAW)
@@ -700,12 +658,17 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
         error_code = e.orig.args[0]
         
         if error_code == 1049: # DB가 없는 경우 만들고, 다시 연결해준다
+            
             engine_temp = get_engine()
             conn_temp = engine_temp.connect()
             
-            create_main_db(conn_temp)
-            create_raw_db(conn_temp)
+            q = f"CREATE DATABASE IF NOT EXISTS {MYSQL_DB}"
+            q_raw = f"CREATE DATABASE IF NOT EXISTS {MYSQL_DB_RAW}"
             
+            conn_temp.execute(q)
+            conn_temp.execute(q_raw)
+            
+            conn_temp.close()
             engine_temp.dispose()
             
             engine = get_engine(db = MYSQL_DB)
@@ -713,7 +676,16 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
 
             conn = engine.connect()
             conn_raw = engine_raw.connect()
-        
+            
+            create_main_db(conn)
+            create_raw_db(conn_raw)
+    
+    return engine, engine_raw, conn, conn_raw
+    
+    
+def main_func(test = False, TO_CSV = False, TO_SQL = True):
+    
+    engine, engine_raw, conn, conn_raw = get_engine_connect()
     
     # 0(실행X), 1(실행O), "First"(최초 실행) 반환, 1인 경우 아예 실행 X
     today_executed = check_today_executed(conn, by = 'sql') 
@@ -726,9 +698,6 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
         if type(today_df) == bool: 
             
             print("사이트가 제대로 작동하지 않음 : 갖고 있는 데이터만 수집")
-            q = f'USE {MYSQL_DB};'
-            conn.execute(q)
-            
             q = f"SELECT appid FROM {TABLE_INFO};"
             appid = pd.read_sql(q, conn)['appid'].sort_values()
 
@@ -772,4 +741,4 @@ main_func(test, TO_CSV = False, TO_SQL = True)
 schedule.every(6).hours.do(main_func)
 while True:
     schedule.run_pending()
-    time.sleep(1) # 짧게 잡는 게 좋단다..
+    time.sleep(1)
