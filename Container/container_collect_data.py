@@ -300,19 +300,7 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                         print("500개마다 저장합니다")
                         
                         save_detail_to_sql(conn_raw, temp_lst, today)
-                        
-                        # detail_df = pd.concat(temp_lst)
-                        # detail_df = detail_df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
-                        # detail_df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
 
-                        # temp_df = detail_df.copy()
-                        # temp_df['tags'] = temp_df['tags'].apply(json.dumps) # 이거 때문에 df를 복붙한다
-
-                        # temp_df.to_sql(TABLE_RAW_DETAIL, 
-                        #             con = conn_raw, 
-                        #             if_exists = 'append', 
-                        #             index = False)
-                        
                         temp_lst = []
                 
             except RequestException:
@@ -366,6 +354,9 @@ def add_data_to_db(conn, conn_raw, today_df, check_data = 'sql', to_csv = True, 
     # 오늘 새로 생긴 appid와 순위에서 벗어난 appid 수집
     already_appid = info_df['appid']
     today_appid = today_df['appid']
+    
+    # 오늘 이미 데이터가 들어가 있는 경우 실행 스킵
+    # `time_value` 테이블을 체크하는데, `pd.to_sql()`로 raw 데이터가 한번에 들어가기 때문이다
     
     oldbie_df = today_df[today_df['appid'].isin(already_appid)][:]
     newbie_appid = set(today_appid) - set(oldbie_df['appid']) # 기존에 없다가 5000위 내로 진입
@@ -465,35 +456,21 @@ def create_table(conn, conn_raw, df, to_csv = True, to_sql = True, test = False)
         
         tag_df['tags'] = tag_df['tags'].apply(json.dumps)
         tag_df.to_sql(TABLE_TAG, con = conn, if_exists = 'append', index = False)
-        
 
-
-        
-def check_CS_GO_values(conn):
-    
+def check_time_values(conn, today):
     """
-    날짜가 변경되더라도 steamspy 사이트가 갱신되지 않았을 수 있음(갱신 시간을 모름)
-    따라서 가장 변동이 있을 확률이 높은 카스 글옵을 조사함
-    데이터에 변동이 있다면 수집, 아니면 오늘 이미 수집된 것으로 판단함.
-    현재까지 get=all이 이상한 적은 있었어도 appdetails 수집은 정상적이었기 때문에 이런 가정으로 접근함.
+    오늘 이미 실행되었는지를 time_value 테이블을 통해 점검함 \ 
+    time_value 테이블은 가공이 완료된 후에 들어가므로, \\
+    날짜 정보가 있다면 실행된 적 있으니까 또 실행할 필요 없음.
     """
-        
-    q = f"""SELECT * FROM {TABLE_TIME_VALUE} WHERE appid = 730 ORDER BY date DESC LIMIT 1"""
-    df = pd.read_sql(q, conn)
-    df = df.drop('date', axis = 1)
-
-    data_request = {'request' : 'appdetails', 'appid' : f'{730}'}
-    data = steamspypi.download(data_request)
+    q = f"SELECT date FROM time_value where date = '{today}'"
+    ans = conn.execute(q).fetchone()[0]
     
-    if (df.positive[0] == data['positive'] and
-        df.negative[0] == data['negative'] and
-        df.ccu[0] == data['ccu'] and
-        df.average_2weeks[0] == data['average_2weeks'] and
-        df.median_2weeks[0] == data['median_2weeks']):
-        return True
-    else:
-        return False
+    if ans == today:
+        return 1
     
+    elif ans == None or ans != today:
+        return 0
 
 def check_today_executed(conn, by = 'sql'):
         
@@ -526,14 +503,14 @@ def check_today_executed(conn, by = 'sql'):
     if by == 'sql':
 
         try:
-            executed = check_CS_GO_values(conn)
+            executed = check_time_values(conn, today)
             
             if executed:
-                print("웹의 정보와 SQL의 정보가 동일함")
+                print("오늘 정보가 이미 time_value에 있음")
                 return 1
             
             else:
-                print("웹의 정보와 SQL의 정보가 다름")
+                print("오늘 정보가 time_value에 없음")
                 return 0
             
         except (ProgrammingError, TypeError, IndexError): # 데이터가 없는 경우
@@ -742,7 +719,7 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
     engine.dispose()
     engine_raw.dispose()
     
-    print("6시간 후에 재실행됨")
+    print("12시간 후에 재실행됨")
 
 test = False
 
@@ -751,7 +728,7 @@ if MYSQL_DB != 'steam':
     print("테스트 중")
 
 main_func(test, TO_CSV = False, TO_SQL = True)
-schedule.every(6).hours.do(main_func)
+schedule.every(12).hours.do(main_func)
 while True:
     schedule.run_pending()
     time.sleep(1)
