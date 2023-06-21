@@ -463,15 +463,18 @@ def check_time_values(conn, today):
     time_value 테이블은 가공이 완료된 후에 들어가므로, \\
     날짜 정보가 있다면 실행된 적 있으니까 또 실행할 필요 없음.
     """
-    q = f"SELECT date FROM time_value where date = '{today}'"
-    ans = conn.execute(q).fetchone()[0]
-    
-    if ans == today:
-        return 1
-    
-    elif ans == None or ans != today:
-        return 0
+    try:
+        q = f"SELECT date FROM {TABLE_TIME_VALUE} where date = '{today}'"
+        ans = conn.execute(q).fetchone()[0]
 
+        if ans == today:
+            return 1
+
+    except TypeError:
+        # 쿼리에 따른 리턴이 없는 경우 : 테이블이 없거나 오늘 date가 없음
+        print("db가 있으나 오늘자 데이터가 없음")
+        return 0
+    
 def check_today_executed(conn, by = 'sql'):
         
     """
@@ -513,7 +516,8 @@ def check_today_executed(conn, by = 'sql'):
                 print("오늘 정보가 time_value에 없음")
                 return 0
             
-        except (ProgrammingError, TypeError, IndexError): # 데이터가 없는 경우
+        except (ProgrammingError, IndexError) as e: # db가 없는 경우
+            print(e)
             print("테이블이 없거나 테이블에 정보가 없음 : 첫 실행")
             return "First"
 
