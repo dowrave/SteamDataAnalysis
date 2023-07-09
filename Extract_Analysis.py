@@ -85,21 +85,21 @@ def get_csv_files(get_tag = False):
     
     q = f"SELECT * FROM info"
     info = pd.read_sql(q, conn)
-    info.to_csv('info.csv', index = False)
+    info.to_csv('data/info.csv', index = False)
 
     q = f"SELECT * FROM time_value"
     time_value = pd.read_sql(q, conn)
-    time_value.to_csv('time_value.csv', index = False)
+    time_value.to_csv('data/time_value.csv', index = False)
 
     q = f"SELECT * FROM lang_genre"
     lang_genre = pd.read_sql(q, conn)
     lang_genre = lang_genre_split_features(lang_genre)
-    lang_genre.to_csv('lang_genre.csv', index = False)
+    lang_genre.to_csv('data/lang_genre.csv', index = False)
     
     if get_tag:
         q = f"SELECT * FROM tag"
         tag = pd.read_sql(q, conn)
-        tag.to_csv('tag.csv', index = False)
+        tag.to_csv('data/tag.csv', index = False)
         pass
 
     engine.dispose()

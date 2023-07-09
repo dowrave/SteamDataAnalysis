@@ -253,7 +253,7 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
     """
     
     need_to_collect = check_today_raw_detail_data(conn_raw, appids)
-    
+    today = datetime.today().date() - timedelta(days = 1)
     
     if test:
         appids = appids[:100]
@@ -275,7 +275,6 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
         print(f"appdetails 수집 - 예정 소요 시간 : {len(appids)}초")
 
         temp_lst = []
-        today = datetime.today().date() - timedelta(days = 1)
 
         for count, i in enumerate(appids):
             
@@ -723,7 +722,7 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
     engine.dispose()
     engine_raw.dispose()
     
-    print("12시간 후에 재실행됨")
+    print("6시간 후에 재실행됨")
 
 test = False
 
@@ -732,7 +731,7 @@ if MYSQL_DB != 'steam':
     print("테스트 중")
 
 main_func(test, TO_CSV = False, TO_SQL = True)
-schedule.every(12).hours.do(main_func)
+schedule.every(6).hours.do(main_func)
 while True:
     schedule.run_pending()
     time.sleep(1)
