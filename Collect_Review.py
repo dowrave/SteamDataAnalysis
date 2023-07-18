@@ -72,6 +72,7 @@ def get_reviews(target = 'all'):
     conn = engine.connect()
     conn_raw = engine_raw.connect()
     
+ 
     # INT로 할 필요 없는 값도 INT로 지정함 
     # 예를 들면 게시글 따봉 수 같은 것도 INT UNSIGNED로 지정된 듯한 값들이 보이기 때문임(4294967295)
     # 데이터를 수집하다가 오류가 뜨는 경우가 있어서 그냥 int로 지정해둠
@@ -99,7 +100,7 @@ def get_reviews(target = 'all'):
     )
     """
     conn_raw.execute(q)
-    
+
     q2 = f"""CREATE TABLE IF NOT EXISTS appid_collected (
         appid INT UNSIGNED NOT NULL,
         year VARCHAR(4) NOT NULL,
@@ -107,7 +108,8 @@ def get_reviews(target = 'all'):
         )
         """
     conn_raw.execute(q2)
-    
+
+   
     if target == 'all':
 
         # 임시 : 어떤 날짜에 수집하다가 중간에 오류 발생으로 끊겼을 때, 중간부터 시작하기 위한 코드

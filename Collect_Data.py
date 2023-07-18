@@ -664,6 +664,7 @@ def get_engine_connect():
     
 def main_func(test = False, TO_CSV = False, TO_SQL = True):
     
+    print("실행 시간 : ", datetime.today())
     engine, engine_raw, conn, conn_raw = get_engine_connect()
     
     # 0(실행X), 1(실행O), "First"(최초 실행) 반환, 1인 경우 아예 실행 X
