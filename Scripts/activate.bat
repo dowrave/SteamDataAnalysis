@@ -1,5 +1,10 @@
 @set "VIRTUAL_ENV=C:\Users\dowra\OneDrive\바탕 화면\steam_project"
 
+:: JAVA 경로 지정
+:: @set "JAVA_HOME=C:\Program Files\Java\jdk-20" 
+
+
+
 @if defined _OLD_VIRTUAL_PROMPT (
     @set "PROMPT=%_OLD_VIRTUAL_PROMPT%"
 ) else (
