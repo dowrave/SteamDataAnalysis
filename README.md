@@ -44,3 +44,4 @@
   - 수집 시간이 매우 오래 걸림(최소 12시간 이상)
   - 한 게임에 리뷰가 1000개를 넘어가는 경우가 잘 없어서, 영어 리뷰 데이터라도 수집해야 할까 고민 중
 
+#### [프로젝트 일지](https://github.com/dowrave/TIL/tree/main/Obsidian/1.%20Projects/%EC%8A%A4%ED%8C%80%20%EB%8D%B0%EC%9D%B4%ED%84%B0%20%EB%B6%84%EC%84%9D/%EC%9D%BC%EC%A7%80)
