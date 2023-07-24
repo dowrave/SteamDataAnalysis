@@ -161,14 +161,14 @@ def get_steamspy_data(conn, N = 5, to_csv = True, to_sql = True, test = False):
         
         # request = all 요청은 1분에 1번씩만 가능
         time.sleep(60)
-        
-        print(f"{(i + 1) * 1000}개 데이터 수집 완료")
     
     # 데이터 취합 & 필요없는 정보 제거 & 중복 제거
     df = pd.concat(lst) 
     df = df.drop(['userscore', 'owners', 'score_rank'], axis = 1)
     df.loc[:, 'date'] = today.strftime('%Y-%m-%d')
     df = df.drop_duplicates(subset = ['appid'])
+    print(df.shape[0], "개 데이터 수집 완료")
+    
     if to_csv:
         df.to_csv(f'daily_raw_data/raw_{today.strftime("%Y%m%d")}.csv', index = False)
     
@@ -291,12 +291,9 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                 temp_lst.append(temp_df)
 
                 if count > 0:
-                    if count % 50 == 0:
-                        print(i)
-                        print(f"{count}번째 데이터 작업 중")
 
                     if count % 500 == 0 and to_sql:
-                        print("500개마다 저장합니다")
+                        print("detail : 500개마다 저장합니다")
                         
                         save_detail_to_sql(conn_raw, temp_lst, today)
 
@@ -331,7 +328,7 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
 
             del_checkpoint(conn_raw) 
         
-            print("수집 종료")
+            print(today_detail_df.shape[0], "개 detail 데이터 수집 종료")
             
             return today_detail_df
 
@@ -380,7 +377,7 @@ def add_data_to_db(conn, conn_raw, today_df, check_data = 'sql', to_csv = True, 
     # 저장
     add_no_time_data_to_db(conn, newbie_df, to_csv = to_csv, to_sql = to_sql)
     add_time_data_to_db(conn, today_time_value_df, to_csv = to_csv, to_sql = to_sql)
-
+    
 
 def add_no_time_data_to_db(conn, detail_df, to_csv = True, to_sql = True):
     """
@@ -723,6 +720,10 @@ def main_func(test = False, TO_CSV = False, TO_SQL = True):
     engine.dispose()
     engine_raw.dispose()
     
+    
+    today = datetime.today().date() - timedelta(days = 1)
+
+    print(today, "날짜의 데이터 수집 및 처리 작업 완료")
     print("6시간 후에 재실행됨")
 
 test = False
