@@ -3,3 +3,5 @@
 data/*
 daily_raw_data/*
 mysql_info.py
+*.csv
+korBERT/*
