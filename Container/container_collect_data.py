@@ -285,15 +285,18 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                 temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
 
                 if type(temp_df) == False:
-                    print("요청 에러가 발생해서 데이터 수집을 종료합니다")
-                    return False
+                    print(f"appid: {i}를 요청했으나 반환값이 없습니다. 다음 appid를 수집합니다.")
+                    continue
 
                 temp_lst.append(temp_df)
 
                 if count > 0:
+                    if count % 50 == 0:
+                        print(i)
+                        print(f"{count}번째 데이터 작업 중")
 
                     if count % 500 == 0 and to_sql:
-                        print("detail : 500개마다 저장합니다")
+                        print("500개마다 저장합니다")
                         
                         save_detail_to_sql(conn_raw, temp_lst, today)
 
@@ -303,15 +306,17 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                 
                 # steamspy에서 불러오는 함수에 에러가 발생한 경우를 가정함
                 # 현재 temp_lst에 있는 데이터들을 저장하고, 체크포인트를 넣어둠
+                if temp_lst:
+                    save_detail_to_sql(conn_raw, temp_lst, today)
                 
-                save_detail_to_sql(conn_raw, temp_lst, today)
+                print(f"appid: {i}에 대한 에러가 발생, 체크포인트를 저장하고 다음 appid를 수집합니다.")
                 
                 del_checkpoint(conn_raw) 
                 log_checkpoint(conn_raw, count)
                 
-                print("에러가 발생해서 체크포인트를 저장하고 프로그램이 일시 종료됩니다")
-                
-                sys.exit(1)
+                continue
+ 
+                # sys.exit(1)
         
         # 마지막 수집 이후 저장
         
@@ -364,10 +369,13 @@ def add_data_to_db(conn, conn_raw, today_df, check_data = 'sql', to_csv = True, 
     # 순위 이탈 & 진입 데이터를 수집
     additional_appid = newbie_appid | outrank_appid 
     additional_appid = list(additional_appid)
+    
     additional_df = get_details(conn_raw, additional_appid, test = test)
     
     # newbie는 새로 생긴 데이터들 -> 3개의 테이블에 추가
     newbie_df = additional_df[additional_df['appid'].isin(newbie_appid)]
+    
+    add_no_time_data_to_db(conn, newbie_df, to_csv = to_csv, to_sql = to_sql)
     
     # 시간에 관한 테이블은 오늘까지 취합된 모든 데이터에 대해 진행
     oldbie_time_value_df = oldbie_df[COLUMNS_TIME_VALUE]
@@ -375,7 +383,6 @@ def add_data_to_db(conn, conn_raw, today_df, check_data = 'sql', to_csv = True, 
     today_time_value_df = pd.concat([oldbie_time_value_df, additional_time_value_df])
     
     # 저장
-    add_no_time_data_to_db(conn, newbie_df, to_csv = to_csv, to_sql = to_sql)
     add_time_data_to_db(conn, today_time_value_df, to_csv = to_csv, to_sql = to_sql)
     
 

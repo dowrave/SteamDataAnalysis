@@ -276,8 +276,8 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                 temp_df = pd.DataFrame.from_dict(data, orient = 'index').T
 
                 if type(temp_df) == False:
-                    print("요청 에러가 발생해서 데이터 수집을 종료합니다")
-                    return False
+                    print(f"appid: {i}를 요청했으나 반환값이 없습니다. 다음 appid를 수집합니다.")
+                    continue
 
                 temp_lst.append(temp_df)
 
@@ -297,15 +297,17 @@ def get_details(conn_raw, appids: iter, to_csv = False, to_sql = True, test = Fa
                 
                 # steamspy에서 불러오는 함수에 에러가 발생한 경우를 가정함
                 # 현재 temp_lst에 있는 데이터들을 저장하고, 체크포인트를 넣어둠
+                if temp_lst:
+                    save_detail_to_sql(conn_raw, temp_lst, today)
                 
-                save_detail_to_sql(conn_raw, temp_lst, today)
+                print(f"appid{i}에 대한 에러가 발생, 체크포인트를 저장하고 다음 appid를 수집합니다.")
                 
                 del_checkpoint(conn_raw) 
                 log_checkpoint(conn_raw, count)
                 
-                print("에러가 발생해서 체크포인트를 저장하고 프로그램이 일시 종료됩니다")
-                
-                sys.exit(1)
+                continue
+ 
+                # sys.exit(1)
         
         # 마지막 수집 이후 저장
         
